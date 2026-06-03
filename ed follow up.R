@@ -9,6 +9,7 @@ ed <- dbGetQuery(con, "
         				,pt.PrimaryMRN AS MRN
         				,pt.Name
         				,pt.BirthDate
+        				,pr2.Name AS PCP
         				,enc.EncounterEpicCSN AS CSN
         				,enc.AdmissionType
         				,enc.PrimaryCoverageKey
@@ -18,22 +19,24 @@ ed <- dbGetQuery(con, "
         				,dd2.DateValue AS EDDischargeDate
         				,enc.DischargeDisposition
         				,dur.Years AS Age
-        				,pr.Name AS Provider
+        				,pr1.Name AS Provider
+        				,ct.Role
+        				,ct.IsPrimaryCareRole
         				,ct.StartInstant AS CareTeamStartInstant
         				,ct.EndInstant AS CareTeamEndInstant
-        				,CASE WHEN pr.Name LIKE '%beech acres%' THEN 'Beech Acres'
-        				  WHEN pr.Name LIKE '%best point%' THEN 'Best Point'
-        				  WHEN pr.Name LIKE '%camelot%' THEN 'Camelot'
-        				  WHEN pr.Name LIKE '%community behavioral health%' 
+        				,CASE WHEN pr1.Name LIKE '%beech acres%' THEN 'Beech Acres'
+        				  WHEN pr1.Name LIKE '%best point%' THEN 'Best Point'
+        				  WHEN pr1.Name LIKE '%camelot%' THEN 'Camelot'
+        				  WHEN pr1.Name LIKE '%community behavioral health%' 
         				    THEN 'Community Behavioral Health'
-        				  WHEN pr.Name LIKE '%focus on youth%' THEN 'Focus on Youth'
-        				  WHEN pr.Name LIKE '%greater cin bh svc%'
+        				  WHEN pr1.Name LIKE '%focus on youth%' THEN 'Focus on Youth'
+        				  WHEN pr1.Name LIKE '%greater cin bh svc%'
         				    THEN 'Greater Cin BH SVC'
-        				  WHEN pr.Name LIKE '%integrated%' THEN 'Integrated SVC BH'
-        				  WHEN pr.Name LIKE '%lighthouse%' THEN 'Lighthouse'
-        				  WHEN pr.Name LIKE '%newpath%' THEN 'NewPath'
-        				  WHEN pr.Name LIKE '%talbert%' THEN 'Talbert House'
-        				  WHEN pr.Name LIKE '%transitions%' THEN 'Transitions'
+        				  WHEN pr1.Name LIKE '%integrated%' THEN 'Integrated SVC BH'
+        				  WHEN pr1.Name LIKE '%lighthouse%' THEN 'Lighthouse'
+        				  WHEN pr1.Name LIKE '%newpath%' THEN 'NewPath'
+        				  WHEN pr1.Name LIKE '%talbert%' THEN 'Talbert House'
+        				  WHEN pr1.Name LIKE '%transitions%' THEN 'Transitions'
         				  ELSE NULL END AS BehavioralHealthProvider
 	FROM Caboodle.dbo.EncounterFact enc
 		INNER JOIN Caboodle.dbo.PatientDim pt
@@ -60,7 +63,7 @@ ed <- dbGetQuery(con, "
 						'HP HEDIS V1 2023 INTENTIONAL SELF-HARM 2023-03-31'
 							)
 		INNER JOIN Caboodle.dbo.DateDim dd
-			ON dd.DateKey = enc.DateKey  -- admit date
+			ON dd.DateKey = enc.DateKey  
 				AND dd.DateValue >= '2026-01-01'
 		INNER JOIN Caboodle.dbo.DateDim dd2
 			ON dd2.DateKey = enc.DischargeDateKey 
@@ -71,8 +74,10 @@ ed <- dbGetQuery(con, "
 				dd.DateValue BETWEEN ct.StartInstant AND ct.EndInstant
 				OR dd2.DateValue BETWEEN ct.StartInstant AND ct.EndInstant
 				)
-		LEFT JOIN Caboodle.dbo.ProviderDim pr
-			ON ct.ProviderKey = pr.ProviderKey
+		LEFT JOIN Caboodle.dbo.ProviderDim pr1
+			ON ct.ProviderKey = pr1.ProviderKey
+		LEFT JOIN Caboodle.dbo.ProviderDim pr2
+		  ON pt.PrimaryCareProviderKey = pr2.ProviderKey
 		LEFT JOIN Caboodle.dbo.CoverageDim cov
 			ON enc.PrimaryCoverageKey = cov.CoverageKey
 		WHERE enc.IsHospitalAdmission = 0
@@ -82,7 +87,6 @@ ed <- dbGetQuery(con, "
 			AND pt.IsCurrent = 1
 			AND enc.DischargeDisposition IN (
 			  'Discharged to Home or Self Care (Routine Discharge)',
-			  '',
 			  'Home or Self Care'
 			)
 ")
@@ -93,6 +97,7 @@ ed_unique <- ed |>
     MRN, 
     Name, 
     BirthDate, 
+    PCP,
     CSN, 
     PayorFinancialClass, 
     DepartmentName, 
@@ -222,25 +227,10 @@ success <- inner_join(
   filter(VisitDate == min(VisitDate)) |>
   ungroup() |>
   right_join(ed_denom) |>
-  mutate(Success = ifelse(is.na(VisitDate), 0, 1))
+  mutate(Success = ifelse(is.na(VisitDate), 0, 1)) |>
+  filter(EDVisitDate < today() - 14)
 
-ed_final <- success |>
-  distinct(
-    CSN, 
-    MRN,
-    Name,
-    BirthDate,
-    PayorFinancialClass,
-    DepartmentName,
-    EDVisitDate,
-    EDDischargeDate,
-    Age,
-    Success
-    ) |>
-  mutate(Month = floor_date(EDVisitDate, "month")) 
-
-attrib <- inner_join(ed, select(ed_final, CSN)) |>
-  select(CSN, Provider) |>
+attrib <- inner_join(success |> distinct(CSN), select(ed, CSN, Provider)) |>
   mutate(
     Provider = case_when(
       str_detect(Provider, "BEECH ACRES") ~ "Beech Acres",
@@ -256,7 +246,56 @@ attrib <- inner_join(ed, select(ed_final, CSN)) |>
       str_detect(Provider, "TRANSITIONS") ~ "Transitions",
       is.na(Provider) ~ "None"
     )
-  )
+  ) |>
+  unique()
+
+ed_final <- success |>
+  distinct(
+    CSN, 
+    MRN,
+    Name,
+    BirthDate,
+    PayorFinancialClass,
+    PCP,
+    DepartmentName,
+    EDVisitDate,
+    EDDischargeDate,
+    Age,
+    Success
+    ) |>
+  left_join(attrib) |>
+  group_by(CSN) |>
+  mutate(rn = row_number()) |>
+  ungroup() |>
+  pivot_wider(
+    id_cols = CSN:Success, 
+    names_from = rn, 
+    names_prefix = "BHProvider",
+    values_from = Provider
+    ) |>
+  mutate(
+    Month = case_when(
+      floor_date(EDVisitDate, "month") < floor_date(today() - 14, "month") ~ 
+        floor_date(EDVisitDate, "month")
+    ),
+    PayorFinancialClass = ifelse(
+      PayorFinancialClass == "HMO Medicaid Cap",
+      "HMO Medicaid Cap (HealthVine)",
+      PayorFinancialClass
+      ),
+    Failure = ifelse(Success == 1, 0, 1),
+    PCP = ifelse(
+      PCP %in% c(
+        "FAIRFIELD, PRIMARY CARE CENTER GROUP", 
+        "HOPPLE STREET, HEALTH CENTER GROUP", 
+        "HUGHES CENTER HS, PRIMARY CARE CENTER", "PEDIATRIC, PRIMARY CARE", 
+        "ROCKDALE ACADEMY, PRIMARY CARE CENTER", 
+        "SOUTH AVONDALE ELEMENTARY, PRIMARY CARE CENTER"
+        ),
+      paste0(("*"), PCP),
+      PCP
+      )
+    ) 
 
 fu <- success |>
   distinct(CSN, VisitDate, PRACTICE_NAME)
