@@ -4,91 +4,126 @@ library(odbc)
 
 con <- dbConnect(odbc(), "CaboodleProd")
 
+oakcodes <- dbGetQuery(con, "
+  SELECT DISTINCT Value
+  	FROM caboodle.dbo.DiagnosisTerminologyDim
+  	WHERE Type = 'ICD-10-CM'
+    	AND (
+    		Value LIKE 'F0%'
+    		OR Value LIKE 'F1[0-6]%'
+    		OR Value LIKE 'F1[8-9]%'
+    		OR Value LIKE 'F[2-6]%'
+    		OR Value LIKE 'F84%'
+    		OR Value LIKE 'F9[0-8]%'
+    		OR Value LIKE 'T14.91%'
+    		OR Value LIKE 'T3[6-9].__[1-4]'
+    		OR Value LIKE 'T4_.__[1-4]'
+    		OR Value LIKE 'T50.__[1-4]'
+    		OR Value LIKE 'X7[1-9]%'
+    		OR Value LIKE 'X8[0-3]%'
+    		OR Value IN (
+    		      'F88', 'F99', 'R45.850', 'R45.851', 'R45.88', 
+    		      'Z72.810', 'Z72.811', 'Z91.51', 'Z91.52'
+    		    )
+    		)
+") |>
+  pull()
+
 ed <- dbGetQuery(con, "
  SELECT DISTINCT pt.DurableKey AS PatientDurableKey
-        				,pt.PrimaryMRN AS MRN
-        				,pt.Name
-        				,pt.BirthDate
-        				,pr2.Name AS PCP
-        				,enc.EncounterEpicCSN AS CSN
-        				,enc.AdmissionType
-        				,enc.PrimaryCoverageKey
-        				,cov.PayorFinancialClass
-        				,d.DepartmentName
-        				,dd.DateValue AS EDVisitDate
-        				,dd2.DateValue AS EDDischargeDate
-        				,enc.DischargeDisposition
-        				,dur.Years AS Age
-        				,pr1.Name AS Provider
-        				,ct.Role
-        				,ct.IsPrimaryCareRole
-        				,ct.StartInstant AS CareTeamStartInstant
-        				,ct.EndInstant AS CareTeamEndInstant
-        				,CASE WHEN pr1.Name LIKE '%beech acres%' THEN 'Beech Acres'
-        				  WHEN pr1.Name LIKE '%best point%' THEN 'Best Point'
-        				  WHEN pr1.Name LIKE '%camelot%' THEN 'Camelot'
-        				  WHEN pr1.Name LIKE '%community behavioral health%' 
-        				    THEN 'Community Behavioral Health'
-        				  WHEN pr1.Name LIKE '%focus on youth%' THEN 'Focus on Youth'
-        				  WHEN pr1.Name LIKE '%greater cin bh svc%'
-        				    THEN 'Greater Cin BH SVC'
-        				  WHEN pr1.Name LIKE '%integrated%' THEN 'Integrated SVC BH'
-        				  WHEN pr1.Name LIKE '%lighthouse%' THEN 'Lighthouse'
-        				  WHEN pr1.Name LIKE '%newpath%' THEN 'NewPath'
-        				  WHEN pr1.Name LIKE '%talbert%' THEN 'Talbert House'
-        				  WHEN pr1.Name LIKE '%transitions%' THEN 'Transitions'
-        				  ELSE NULL END AS BehavioralHealthProvider
-	FROM Caboodle.dbo.EncounterFact enc
-		INNER JOIN Caboodle.dbo.PatientDim pt
-			ON enc.PatientDurableKey = pt.DurableKey
-		INNER JOIN Caboodle.dbo.DurationDim dur
-		  ON enc.AgeKey = dur.DurationKey
-		INNER JOIN Caboodle.dbo.DiagnosisEventFact dev
-			ON dev.EncounterKey = enc.EncounterKey
-				AND dev.Type = 'encounter diagnosis'
-		INNER JOIN Caboodle.dbo.DepartmentDim d
-			ON d.DepartmentKey = enc.DepartmentKey
-				AND d.DepartmentEpicID IN ('30001001','30010001')
-		INNER JOIN Caboodle.dbo.DiagnosisTerminologyDim dtg
-			ON dtg.DiagnosisKey = dev.DiagnosisKey
-		INNER JOIN Caboodle.dbo.DiagnosisTerminologyDim AS y
-			ON y.DiagnosisKey = dev.DiagnosisKey
-		INNER JOIN Caboodle.dbo.TerminologyConceptSetDim AS x
-			ON x.TerminologyConceptKey = y.TerminologyConceptKey
-				AND x.Concept = y.Value
-				AND y.Type = 'ICD-10-CM'
-				AND x.StandardName = 'ICD-10-CM'
-				AND x.Name IN (
-						'HP HEDIS V1 2023 MENTAL HEALTH DIAGNOSIS 2023-03-31',
-						'HP HEDIS V1 2023 INTENTIONAL SELF-HARM 2023-03-31'
-							)
-		INNER JOIN Caboodle.dbo.DateDim dd
-			ON dd.DateKey = enc.DateKey  
-				AND dd.DateValue >= '2026-01-01'
-		INNER JOIN Caboodle.dbo.DateDim dd2
-			ON dd2.DateKey = enc.DischargeDateKey 
-		LEFT JOIN Caboodle.dbo.CareTeamFact ct
-			ON ct.PatientKey = pt.PatientKey
-			AND ct.Role = 'Behavioral Health Service'
-			AND (
-				dd.DateValue BETWEEN ct.StartInstant AND ct.EndInstant
-				OR dd2.DateValue BETWEEN ct.StartInstant AND ct.EndInstant
-				)
-		LEFT JOIN Caboodle.dbo.ProviderDim pr1
-			ON ct.ProviderKey = pr1.ProviderKey
-		LEFT JOIN Caboodle.dbo.ProviderDim pr2
-		  ON pt.PrimaryCareProviderKey = pr2.ProviderKey
-		LEFT JOIN Caboodle.dbo.CoverageDim cov
-			ON enc.PrimaryCoverageKey = cov.CoverageKey
-		WHERE enc.IsHospitalAdmission = 0
-			AND enc.AdmissionType IN ('Emergency', 'Urgent') 
-			AND dev._IsDeleted = 0
-			AND dev.IsPrimary = 1
-			AND pt.IsCurrent = 1
-			AND enc.DischargeDisposition IN (
-			  'Discharged to Home or Self Care (Routine Discharge)',
-			  'Home or Self Care'
-			)
+            		,pt.PrimaryMRN AS MRN
+            		,pt.Name
+            		,pt.BirthDate
+            		,pr2.Name AS PCP
+            		,enc.EncounterEpicCSN AS CSN
+            		,enc.AdmissionType
+    		    		,dtg.Value AS DX
+            		,enc.PrimaryCoverageKey
+            		,cov.PayorFinancialClass
+            		,d.DepartmentName
+            		,dd.DateValue AS EDVisitDate
+            		,dd2.DateValue AS EDDischargeDate
+            		,enc.DischargeDisposition
+            		,dur.Years AS Age
+            		,pr1.Name AS Provider
+            		,ct.Role
+            		,ct.IsPrimaryCareRole
+            		,ct.StartInstant AS CareTeamStartInstant
+            		,ct.EndInstant AS CareTeamEndInstant
+            		,CASE WHEN pr1.Name LIKE '%beech acres%' THEN 'Beech Acres'
+            			WHEN pr1.Name LIKE '%best point%' THEN 'Best Point'
+            			WHEN pr1.Name LIKE '%camelot%' THEN 'Camelot'
+            			WHEN pr1.Name LIKE '%community behavioral health%' 
+            			THEN 'Community Behavioral Health'
+            			WHEN pr1.Name LIKE '%focus on youth%' THEN 'Focus on Youth'
+            			WHEN pr1.Name LIKE '%greater cin bh svc%'
+            			THEN 'Greater Cin BH SVC'
+            			WHEN pr1.Name LIKE '%integrated%' THEN 'Integrated SVC BH'
+            			WHEN pr1.Name LIKE '%lighthouse%' THEN 'Lighthouse'
+            			WHEN pr1.Name LIKE '%newpath%' THEN 'NewPath'
+            			WHEN pr1.Name LIKE '%talbert%' THEN 'Talbert House'
+            			WHEN pr1.Name LIKE '%transitions%' THEN 'Transitions'
+            			ELSE NULL END AS BehavioralHealthProvider
+  	FROM Caboodle.dbo.EncounterFact enc
+  		INNER JOIN Caboodle.dbo.PatientDim pt
+  			ON enc.PatientDurableKey = pt.DurableKey
+  		INNER JOIN Caboodle.dbo.DurationDim dur
+  		  ON enc.AgeKey = dur.DurationKey
+  		INNER JOIN Caboodle.dbo.DiagnosisEventFact dev
+  			ON dev.EncounterKey = enc.EncounterKey
+  				AND dev.Type = 'encounter diagnosis'
+  		INNER JOIN Caboodle.dbo.DepartmentDim d
+  			ON d.DepartmentKey = enc.DepartmentKey
+  				AND d.DepartmentEpicID IN ('30001001','30010001')
+  		INNER JOIN Caboodle.dbo.DiagnosisTerminologyDim dtg
+  			ON dtg.DiagnosisKey = dev.DiagnosisKey
+  				AND dtg.Type = 'ICD-10-CM'
+  		INNER JOIN (
+  				SELECT DISTINCT Value
+  					FROM caboodle.dbo.DiagnosisTerminologyDim
+  					WHERE Type = 'ICD-10-CM'
+  					AND (
+  						Value LIKE 'F0%'
+  						OR Value LIKE 'F[2-6]%'
+  						OR Value LIKE 'F84%'
+  						OR Value LIKE 'F9[0-8]%'
+  						OR Value LIKE 'T14.91%'
+  						OR Value LIKE 'X7[1-9]%'
+  						OR Value LIKE 'X8[0-3]%'
+  						OR Value IN (
+  						      'F88', 'F99', 'R45.850', 'R45.851', 'R45.88', 
+  						      'Z72.810', 'Z72.811', 'Z91.51', 'Z91.52'
+  						      )
+  						)
+  					) a
+  			ON dtg.Value = a.Value
+  		INNER JOIN Caboodle.dbo.DateDim dd
+  			ON dd.DateKey = enc.DateKey  
+  				AND dd.DateValue >= '2026-01-01'
+  		INNER JOIN Caboodle.dbo.DateDim dd2
+  			ON dd2.DateKey = enc.DischargeDateKey 
+  		LEFT JOIN Caboodle.dbo.CareTeamFact ct
+  			ON ct.PatientKey = pt.PatientKey
+  			AND ct.Role = 'Behavioral Health Service'
+  			AND (
+  				dd.DateValue BETWEEN ct.StartInstant AND ct.EndInstant
+  				OR dd2.DateValue BETWEEN ct.StartInstant AND ct.EndInstant
+  				)
+  		LEFT JOIN Caboodle.dbo.ProviderDim pr1
+  			ON ct.ProviderKey = pr1.ProviderKey
+  		LEFT JOIN Caboodle.dbo.ProviderDim pr2
+  		  ON pt.PrimaryCareProviderKey = pr2.ProviderKey
+  		LEFT JOIN Caboodle.dbo.CoverageDim cov
+  			ON enc.PrimaryCoverageKey = cov.CoverageKey
+  		WHERE enc.IsHospitalAdmission = 0
+  			AND enc.AdmissionType IN ('Emergency', 'Urgent') 
+  			AND dev._IsDeleted = 0
+  			AND dev.IsPrimary = 1
+  			AND pt.IsCurrent = 1
+  			AND enc.DischargeDisposition IN (
+  			  'Discharged to Home or Self Care (Routine Discharge)',
+  			  'Home or Self Care'
+  			)
 ")
 
 ed_unique <- ed |>
@@ -113,6 +148,8 @@ hosp <- dbGetQuery(con, "
 				,enc.AdmissionType
 				,d.DepartmentName
 				,dd.DateValue AS HospDate
+				,enc.IsHospitalAdmission
+				,dtg.Value
 	FROM Caboodle.dbo.EncounterFact enc
 		INNER JOIN Caboodle.dbo.PatientDim pt
 			ON enc.PatientDurableKey = pt.DurableKey
@@ -122,9 +159,17 @@ hosp <- dbGetQuery(con, "
 		INNER JOIN Caboodle.dbo.DateDim dd
 			ON dd.DateKey = enc.DateKey  
 				AND dd.DateValue >= '2026-01-01'
+		LEFT JOIN Caboodle.dbo.DiagnosisEventFact dev
+  			ON dev.EncounterKey = enc.EncounterKey
+  				AND dev.Type = 'encounter diagnosis'
+				AND dev._IsDeleted = 0
+  				AND dev.IsPrimary = 1
+		LEFT JOIN Caboodle.dbo.DiagnosisTerminologyDim dtg
+  			ON dtg.DiagnosisKey = dev.DiagnosisKey
+  				AND dtg.Type = 'ICD-10-CM'
 	WHERE (enc.IsHospitalAdmission = 1 OR enc.IsEDVisit = 1)
 		AND AdmissionType != 'Urgent'
-		AND enc.EncounterEpicCSN IS NOT NULL                 
+		AND enc.EncounterEpicCSN IS NOT NULL                  
    ")
 
 exclude <- inner_join(
